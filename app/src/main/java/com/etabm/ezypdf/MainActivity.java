@@ -1,5 +1,8 @@
 package com.etabm.ezypdf;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.webkit.PermissionRequest;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ContentValues;
@@ -33,6 +36,7 @@ public class MainActivity extends Activity {
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
     private Uri cameraOutputUri;
+    private PermissionRequest pendingCameraRequest;
 
     private static final String HOME_URL = "https://ezypdf-app.pages.dev/";
 
@@ -71,8 +75,12 @@ public class MainActivity extends Activity {
                         host.endsWith(".ezypdf-app.pages.dev"))) {
                     return false;
                 }
-                // Keep external links inside the app only when they use HTTPS.
-                return !"https".equalsIgnoreCase(uri.getScheme());
+                // Open external links outside the WebView; keep the native bridge on EzyPdf only.
+                if ("https".equalsIgnoreCase(uri.getScheme())) {
+                    try { startActivity(new Intent(Intent.ACTION_VIEW, uri)); } catch (Exception ignored) { }
+                    return true;
+                }
+                return true;
             }
 
             @Override
@@ -94,6 +102,34 @@ public class MainActivity extends Activity {
                 openImagePicker(params);
                 return true;
             }
+
+            @Override
+            public void onPermissionRequest(PermissionRequest request) {
+                runOnUiThread(() -> {
+                    Uri origin = request.getOrigin();
+                    if (origin == null || !"https".equalsIgnoreCase(origin.getScheme())
+                            || !"ezypdf-app.pages.dev".equalsIgnoreCase(origin.getHost())) {
+                        request.deny();
+                        return;
+                    }
+                    boolean wantsCamera = false;
+                    for (String resource : request.getResources()) {
+                        if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) wantsCamera = true;
+                    }
+                    if (!wantsCamera) { request.deny(); return; }
+                    if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                        request.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+                    } else {
+                        pendingCameraRequest = request;
+                        requestPermissions(new String[]{Manifest.permission.CAMERA}, 702);
+                    }
+                });
+            }
+
+            @Override
+            public void onPermissionRequestCanceled(PermissionRequest request) {
+                if (pendingCameraRequest == request) pendingCameraRequest = null;
+            }
         });
 
         webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
@@ -112,6 +148,21 @@ public class MainActivity extends Activity {
             webView.loadUrl(HOME_URL);
         } else {
             webView.restoreState(savedInstanceState);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 702 && pendingCameraRequest != null) {
+            PermissionRequest request = pendingCameraRequest;
+            pendingCameraRequest = null;
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                request.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+            } else {
+                request.deny();
+                Toast.makeText(this, "Please allow Camera permission for EzyPdf.", Toast.LENGTH_LONG).show();
+            }
         }
     }
 
@@ -184,25 +235,23 @@ public class MainActivity extends Activity {
         String js = "(function(){"
                 + "if(window.__ezyPdfDownloadInstalled)return;"
                 + "window.__ezyPdfDownloadInstalled=true;"
+                + "function saveBlob(url,name){"
+                + "fetch(url).then(r=>r.blob()).then(blob=>{"
+                + "var reader=new FileReader();"
+                + "reader.onloadend=function(){EzyPdfAndroid.savePdf(reader.result,name||'EzyPdf_Document.pdf');};"
+                + "reader.readAsDataURL(blob);"
+                + "}).catch(()=>alert('PDF download failed. Please try again.'));}"
                 + "var originalClick=HTMLAnchorElement.prototype.click;"
                 + "HTMLAnchorElement.prototype.click=function(){"
-                + "var a=this;"
-                + "if(a.href && a.href.indexOf('blob:')===0){"
-                + "fetch(a.href).then(r=>r.blob()).then(blob=>{"
-                + "var reader=new FileReader();"
-                + "reader.onloadend=function(){"
-                + "EzyPdfAndroid.savePdf(reader.result,a.download||'EzyPdf_Document.pdf');"
-                + "};reader.readAsDataURL(blob);"
-                + "}).catch(()=>alert('Could not prepare the PDF download.'));"
-                + "return;"
-                + "}return originalClick.call(this);"
-                + "};"
+                + "var href=this.href||'';"
+                + "if(href.indexOf('blob:')===0 && this.hasAttribute('download')){"
+                + "saveBlob(href,this.getAttribute('download'));return;}"
+                + "return originalClick.apply(this,arguments);};"
                 + "document.addEventListener('click',function(e){"
-                + "var a=e.target.closest ? e.target.closest('a') : null;"
-                + "if(a && a.href && a.href.indexOf('blob:')===0){"
-                + "e.preventDefault();a.click();"
-                + "}},true);"
-                + "})();";
+                + "var a=e.target.closest?e.target.closest('a'):null;"
+                + "if(a&&a.href&&a.href.indexOf('blob:')===0&&a.hasAttribute('download')){"
+                + "e.preventDefault();e.stopImmediatePropagation();saveBlob(a.href,a.getAttribute('download'));}"
+                + "},true);})();";
         webView.evaluateJavascript(js, null);
     }
 
@@ -261,6 +310,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (pendingCameraRequest != null) { pendingCameraRequest.deny(); pendingCameraRequest = null; }
         if (filePathCallback != null) {
             filePathCallback.onReceiveValue(null);
             filePathCallback = null;
@@ -271,5 +321,4 @@ public class MainActivity extends Activity {
         }
         super.onDestroy();
     }
-    }
-          
+}
