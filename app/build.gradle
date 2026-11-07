@@ -1,0 +1,21 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.etabm.ezypdf'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.etabm.ezypdf'
+        minSdk 29
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+    }
+}
+
+
+dependencies {
+    implementation 'androidx.core:core:1.15.0'
+}
