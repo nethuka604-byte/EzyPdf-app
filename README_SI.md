@@ -29,3 +29,10 @@
 - පළමු build එකේදී Android SDK සහ Gradle dependencies download වීමට internet අවශ්‍ය වේ.
 - Camera/Gallery සහ PDF download හැසිරීම device එකක පරීක්ෂා කළ යුතුය.
 - Website එකේ පසුව සිදුවන වෙනස්කම් app එක තුළද පෙන්වෙන්නේ app එක live website එක load කරන නිසාය.
+
+
+## Version 1.1 fixes
+- WebView camera permission requests now trigger Android's Camera permission prompt.
+- Blob-based PDF downloads are sent to Android Downloads through the native bridge.
+- External HTTPS links open outside the WebView to protect the app bridge.
+- Rebuild this updated project and install the new APK over the old version.
