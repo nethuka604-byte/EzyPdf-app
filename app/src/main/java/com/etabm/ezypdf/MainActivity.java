@@ -46,7 +46,6 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(Color.rgb(25, 18, 48));
         getWindow().setNavigationBarColor(Color.BLACK);
 
-        // XML layout එක සම්බන්ධ කිරීම (Status bar overlap වීම වැළැක්වීමට)
         setContentView(R.layout.activity_main);
         webView = findViewById(R.id.webView);
 
@@ -99,7 +98,6 @@ public class MainActivity extends Activity {
                 }
                 filePathCallback = callback;
                 
-                // Camera පර්මිෂන් එක පරීක්ෂා කර popup එක ගෙන්නීම
                 if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
                     requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
                 } else {
@@ -164,6 +162,10 @@ public class MainActivity extends Activity {
                     pendingCameraRequest.deny();
                     pendingCameraRequest = null;
                 }
+                if (filePathCallback != null) {
+                    filePathCallback.onReceiveValue(null);
+                    filePathCallback = null;
+                }
                 Toast.makeText(this, "Camera permission is required to capture photos.", Toast.LENGTH_LONG).show();
             }
         }
@@ -215,7 +217,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == FILE_CHOOSER_REQUEST && filePathCallback != null) {
+        if (requestCode == FILE_CHOOSER_REQUEST) {
+            if (filePathCallback == null) return;
             Uri[] results = null;
             if (resultCode == Activity.RESULT_OK) {
                 if (data != null && data.getClipData() != null) {
@@ -227,6 +230,7 @@ public class MainActivity extends Activity {
                 } else if (data != null && data.getData() != null) {
                     results = new Uri[]{data.getData()};
                 } else if (cameraOutputUri != null) {
+                    File file = new File(getCacheDir(), "camera");
                     results = new Uri[]{cameraOutputUri};
                 }
             }
@@ -240,18 +244,29 @@ public class MainActivity extends Activity {
         String js = "(function(){"
                 + "if(window.__ezyPdfDownloadInstalled)return;"
                 + "window.__ezyPdfDownloadInstalled=true;"
-                + "var originalCreateObjectURL = URL.createObjectURL;"
-                + "URL.createObjectURL = function(blob) {"
-                + "var url = originalCreateObjectURL.apply(this, arguments);"
-                + "if(blob){"
+                + "function saveBlobUrl(url, filename) {"
+                + "fetch(url).then(response => response.blob()).then(blob => {"
                 + "var reader = new FileReader();"
                 + "reader.onloadend = function() {"
-                + "try{ EzyPdfAndroid.savePdf(reader.result, 'EzyPdf_Document.pdf'); }catch(e){}"
+                + "try { EzyPdfAndroid.savePdf(reader.result, filename || 'EzyPdf_Document.pdf'); } catch(e){}"
                 + "};"
                 + "reader.readAsDataURL(blob);"
+                + "}).catch(err => {});"
                 + "}"
-                + "return url;"
+                + "var originalClick = HTMLAnchorElement.prototype.click;"
+                + "HTMLAnchorElement.prototype.click = function() {"
+                + "var href = this.href || '';"
+                + "if(href.indexOf('blob:') === 0 && this.hasAttribute('download')) {"
+                + "saveBlobUrl(href, this.getAttribute('download')); return;"
+                + "}"
+                + "return originalClick.apply(this, arguments);"
                 + "};"
+                + "document.addEventListener('click', function(e) {"
+                + "var a = e.target.closest ? e.target.closest('a') : null;"
+                + "if(a && a.href && a.href.indexOf('blob:') === 0 && a.hasAddress && a.hasAttribute('download')) {"
+                + "e.preventDefault(); e.stopImmediatePropagation(); saveBlobUrl(a.href, a.getAttribute('download'));"
+                + "}"
+                + "}, true); "
                 + "})();";
         webView.evaluateJavascript(js, null);
     }
