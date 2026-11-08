@@ -14,6 +14,8 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
 import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
 import android.webkit.ValueCallback;
@@ -27,7 +29,6 @@ import android.widget.Toast;
 import androidx.core.content.FileProvider;
 
 import java.io.File;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 
@@ -43,11 +44,16 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            getWindow().setDecorFitsSystemWindows(true);
+        }
         getWindow().setStatusBarColor(Color.rgb(25, 18, 48));
         getWindow().setNavigationBarColor(Color.BLACK);
 
         webView = new WebView(this);
         webView.setBackgroundColor(Color.WHITE);
+        
         setContentView(webView);
 
         WebSettings settings = webView.getSettings();
@@ -55,7 +61,7 @@ public class MainActivity extends Activity {
         settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
-        settings.setMediaPlaybackRequiresUserGesture(true);
+        settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setSupportZoom(false);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
@@ -75,7 +81,6 @@ public class MainActivity extends Activity {
                         host.endsWith(".ezypdf-app.pages.dev"))) {
                     return false;
                 }
-                // Open external links outside the WebView; keep the native bridge on EzyPdf only.
                 if ("https".equalsIgnoreCase(uri.getScheme())) {
                     try { startActivity(new Intent(Intent.ACTION_VIEW, uri)); } catch (Exception ignored) { }
                     return true;
@@ -106,19 +111,16 @@ public class MainActivity extends Activity {
             @Override
             public void onPermissionRequest(PermissionRequest request) {
                 runOnUiThread(() -> {
-                    Uri origin = request.getOrigin();
-                    if (origin == null || !"https".equalsIgnoreCase(origin.getScheme())
-                            || !"ezypdf-app.pages.dev".equalsIgnoreCase(origin.getHost())) {
-                        request.deny();
-                        return;
-                    }
                     boolean wantsCamera = false;
                     for (String resource : request.getResources()) {
-                        if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) wantsCamera = true;
+                        if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource) || 
+                            resource.equals("android.webkit.resource.AUDIO_CAPTURE")) {
+                            wantsCamera = true;
+                        }
                     }
-                    if (!wantsCamera) { request.deny(); return; }
+                    
                     if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                        request.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+                        request.grant(request.getResources());
                     } else {
                         pendingCameraRequest = request;
                         requestPermissions(new String[]{Manifest.permission.CAMERA}, 702);
@@ -133,13 +135,16 @@ public class MainActivity extends Activity {
         });
 
         webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
-            if (url != null && url.startsWith("https://")) {
-                Toast.makeText(this, "Opening download…", Toast.LENGTH_SHORT).show();
+            if (url != null) {
+                if (url.startsWith("blob:")) {
+                    return;
+                }
+                Toast.makeText(this, "Downloading PDF...", Toast.LENGTH_SHORT).show();
                 try {
                     Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
                     startActivity(intent);
                 } catch (ActivityNotFoundException e) {
-                    Toast.makeText(this, "Unable to open this download.", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "Unable to open download link.", Toast.LENGTH_LONG).show();
                 }
             }
         });
@@ -158,10 +163,11 @@ public class MainActivity extends Activity {
             PermissionRequest request = pendingCameraRequest;
             pendingCameraRequest = null;
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                request.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+                request.grant(request.getResources());
+                Toast.makeText(this, "Camera Permission Granted", Toast.LENGTH_SHORT).show();
             } else {
                 request.deny();
-                Toast.makeText(this, "Please allow Camera permission for EzyPdf.", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Please allow Camera permission from settings to capture photos.", Toast.LENGTH_LONG).show();
             }
         }
     }
@@ -203,7 +209,7 @@ public class MainActivity extends Activity {
         } catch (ActivityNotFoundException e) {
             if (filePathCallback != null) filePathCallback.onReceiveValue(null);
             filePathCallback = null;
-            Toast.makeText(this, "No image picker is available.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "No image picker available.", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -287,7 +293,7 @@ public class MainActivity extends Activity {
                 out.write(bytes);
                 out.flush();
             }
-            Toast.makeText(this, "PDF saved to Downloads", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "PDF saved to Downloads folder!", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
             Toast.makeText(this, "PDF save failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
@@ -321,4 +327,4 @@ public class MainActivity extends Activity {
         }
         super.onDestroy();
     }
-}
+                                                                             }
