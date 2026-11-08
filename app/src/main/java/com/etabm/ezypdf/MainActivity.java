@@ -13,9 +13,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
-import android.view.View;
-import android.view.WindowInsets;
-import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
 import android.webkit.ValueCallback;
@@ -34,6 +31,7 @@ import java.util.ArrayList;
 
 public class MainActivity extends Activity {
     private static final int FILE_CHOOSER_REQUEST = 701;
+    private static final int CAMERA_PERMISSION_REQUEST = 702;
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
     private Uri cameraOutputUri;
@@ -45,16 +43,12 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            getWindow().setDecorFitsSystemWindows(true);
-        }
         getWindow().setStatusBarColor(Color.rgb(25, 18, 48));
         getWindow().setNavigationBarColor(Color.BLACK);
 
-        webView = new WebView(this);
-        webView.setBackgroundColor(Color.WHITE);
-        
-        setContentView(webView);
+        // XML layout එක සම්බන්ධ කිරීම (Status bar overlap වීම වැළැක්වීමට)
+        setContentView(R.layout.activity_main);
+        webView = findViewById(R.id.webView);
 
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -104,26 +98,24 @@ public class MainActivity extends Activity {
                     filePathCallback.onReceiveValue(null);
                 }
                 filePathCallback = callback;
-                openImagePicker(params);
+                
+                // Camera පර්මිෂන් එක පරීක්ෂා කර popup එක ගෙන්නීම
+                if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
+                } else {
+                    openImagePicker(params);
+                }
                 return true;
             }
 
             @Override
             public void onPermissionRequest(PermissionRequest request) {
                 runOnUiThread(() -> {
-                    boolean wantsCamera = false;
-                    for (String resource : request.getResources()) {
-                        if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource) || 
-                            resource.equals("android.webkit.resource.AUDIO_CAPTURE")) {
-                            wantsCamera = true;
-                        }
-                    }
-                    
                     if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                         request.grant(request.getResources());
                     } else {
                         pendingCameraRequest = request;
-                        requestPermissions(new String[]{Manifest.permission.CAMERA}, 702);
+                        requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
                     }
                 });
             }
@@ -136,9 +128,7 @@ public class MainActivity extends Activity {
 
         webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
             if (url != null) {
-                if (url.startsWith("blob:")) {
-                    return;
-                }
+                if (url.startsWith("blob:")) return;
                 Toast.makeText(this, "Downloading PDF...", Toast.LENGTH_SHORT).show();
                 try {
                     Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
@@ -159,15 +149,22 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == 702 && pendingCameraRequest != null) {
-            PermissionRequest request = pendingCameraRequest;
-            pendingCameraRequest = null;
+        if (requestCode == CAMERA_PERMISSION_REQUEST) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                request.grant(request.getResources());
                 Toast.makeText(this, "Camera Permission Granted", Toast.LENGTH_SHORT).show();
+                if (pendingCameraRequest != null) {
+                    PermissionRequest req = pendingCameraRequest;
+                    pendingCameraRequest = null;
+                    req.grant(req.getResources());
+                } else if (filePathCallback != null) {
+                    openImagePicker(null);
+                }
             } else {
-                request.deny();
-                Toast.makeText(this, "Please allow Camera permission from settings to capture photos.", Toast.LENGTH_LONG).show();
+                if (pendingCameraRequest != null) {
+                    pendingCameraRequest.deny();
+                    pendingCameraRequest = null;
+                }
+                Toast.makeText(this, "Camera permission is required to capture photos.", Toast.LENGTH_LONG).show();
             }
         }
     }
@@ -176,8 +173,10 @@ public class MainActivity extends Activity {
         Intent gallery = new Intent(Intent.ACTION_GET_CONTENT);
         gallery.addCategory(Intent.CATEGORY_OPENABLE);
         gallery.setType("image/*");
-        gallery.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,
-                params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE);
+        if (params != null) {
+            gallery.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,
+                    params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE);
+        }
 
         Intent chooser = Intent.createChooser(gallery, "Choose images");
         ArrayList<Intent> extras = new ArrayList<>();
@@ -241,23 +240,19 @@ public class MainActivity extends Activity {
         String js = "(function(){"
                 + "if(window.__ezyPdfDownloadInstalled)return;"
                 + "window.__ezyPdfDownloadInstalled=true;"
-                + "function saveBlob(url,name){"
-                + "fetch(url).then(r=>r.blob()).then(blob=>{"
-                + "var reader=new FileReader();"
-                + "reader.onloadend=function(){EzyPdfAndroid.savePdf(reader.result,name||'EzyPdf_Document.pdf');};"
+                + "var originalCreateObjectURL = URL.createObjectURL;"
+                + "URL.createObjectURL = function(blob) {"
+                + "var url = originalCreateObjectURL.apply(this, arguments);"
+                + "if(blob){"
+                + "var reader = new FileReader();"
+                + "reader.onloadend = function() {"
+                + "try{ EzyPdfAndroid.savePdf(reader.result, 'EzyPdf_Document.pdf'); }catch(e){}"
+                + "};"
                 + "reader.readAsDataURL(blob);"
-                + "}).catch(()=>alert('PDF download failed. Please try again.'));}"
-                + "var originalClick=HTMLAnchorElement.prototype.click;"
-                + "HTMLAnchorElement.prototype.click=function(){"
-                + "var href=this.href||'';"
-                + "if(href.indexOf('blob:')===0 && this.hasAttribute('download')){"
-                + "saveBlob(href,this.getAttribute('download'));return;}"
-                + "return originalClick.apply(this,arguments);};"
-                + "document.addEventListener('click',function(e){"
-                + "var a=e.target.closest?e.target.closest('a'):null;"
-                + "if(a&&a.href&&a.href.indexOf('blob:')===0&&a.hasAttribute('download')){"
-                + "e.preventDefault();e.stopImmediatePropagation();saveBlob(a.href,a.getAttribute('download'));}"
-                + "},true);})();";
+                + "}"
+                + "return url;"
+                + "};"
+                + "})();";
         webView.evaluateJavascript(js, null);
     }
 
@@ -327,4 +322,4 @@ public class MainActivity extends Activity {
         }
         super.onDestroy();
     }
-                                                                             }
+}
