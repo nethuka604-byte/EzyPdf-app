@@ -1,20 +1,20 @@
 package com.etabm.ezypdf;
 
 import android.Manifest;
-import android.content.pm.PackageManager;
-import android.webkit.PermissionRequest;
 import android.app.Activity;
+import android.app.DownloadManager;
 import android.content.ActivityNotFoundException;
-import android.content.ContentValues;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.provider.MediaStore;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
+import android.webkit.PermissionRequest;
+import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -26,7 +26,6 @@ import android.widget.Toast;
 import androidx.core.content.FileProvider;
 
 import java.io.File;
-import java.io.OutputStream;
 import java.util.ArrayList;
 
 public class MainActivity extends Activity {
@@ -63,8 +62,6 @@ public class MainActivity extends Activity {
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);
 
-        webView.addJavascriptInterface(new PdfBridge(), "EzyPdfAndroid");
-
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -79,12 +76,6 @@ public class MainActivity extends Activity {
                     return true;
                 }
                 return true;
-            }
-
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                super.onPageFinished(view, url);
-                installBlobDownloadHandler();
             }
         });
 
@@ -124,15 +115,28 @@ public class MainActivity extends Activity {
             }
         });
 
-        webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
-            if (url != null) {
-                if (url.startsWith("blob:")) return;
-                Toast.makeText(this, "Downloading PDF...", Toast.LENGTH_SHORT).show();
+        webView.setDownloadListener(new DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimeType, long contentLength) {
                 try {
-                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                    startActivity(intent);
-                } catch (ActivityNotFoundException e) {
-                    Toast.makeText(this, "Unable to open download link.", Toast.LENGTH_LONG).show();
+                    DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+                    request.setMimeType(mimeType);
+                    String cookies = CookieManager.getInstance().getCookie(url);
+                    request.addRequestHeader("cookie", cookies);
+                    request.addRequestHeader("User-Agent", userAgent);
+                    request.setDescription("Downloading PDF file...");
+                    request.setTitle(URLUtil.guessFileName(url, contentDisposition, mimeType));
+                    request.allowScanningByMediaScanner();
+                    request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                    request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimeType));
+
+                    DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                    if (dm != null) {
+                        dm.enqueue(request);
+                        Toast.makeText(getApplicationContext(), "Downloading PDF...", Toast.LENGTH_SHORT).show();
+                    }
+                } catch (Exception e) {
+                    Toast.makeText(getApplicationContext(), "Download failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 }
             }
         });
@@ -149,7 +153,6 @@ public class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == CAMERA_PERMISSION_REQUEST) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "Camera Permission Granted", Toast.LENGTH_SHORT).show();
                 if (pendingCameraRequest != null) {
                     PermissionRequest req = pendingCameraRequest;
                     pendingCameraRequest = null;
@@ -166,7 +169,7 @@ public class MainActivity extends Activity {
                     filePathCallback.onReceiveValue(null);
                     filePathCallback = null;
                 }
-                Toast.makeText(this, "Camera permission is required to capture photos.", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Camera permission is required.", Toast.LENGTH_LONG).show();
             }
         }
     }
@@ -230,82 +233,12 @@ public class MainActivity extends Activity {
                 } else if (data != null && data.getData() != null) {
                     results = new Uri[]{data.getData()};
                 } else if (cameraOutputUri != null) {
-                    File file = new File(getCacheDir(), "camera");
                     results = new Uri[]{cameraOutputUri};
                 }
             }
             filePathCallback.onReceiveValue(results);
             filePathCallback = null;
             cameraOutputUri = null;
-        }
-    }
-
-    private void installBlobDownloadHandler() {
-        String js = "(function(){"
-                + "if(window.__ezyPdfDownloadInstalled)return;"
-                + "window.__ezyPdfDownloadInstalled=true;"
-                + "function saveBlobUrl(url, filename) {"
-                + "fetch(url).then(response => response.blob()).then(blob => {"
-                + "var reader = new FileReader();"
-                + "reader.onloadend = function() {"
-                + "try { EzyPdfAndroid.savePdf(reader.result, filename || 'EzyPdf_Document.pdf'); } catch(e){}"
-                + "};"
-                + "reader.readAsDataURL(blob);"
-                + "}).catch(err => {});"
-                + "}"
-                + "var originalClick = HTMLAnchorElement.prototype.click;"
-                + "HTMLAnchorElement.prototype.click = function() {"
-                + "var href = this.href || '';"
-                + "if(href.indexOf('blob:') === 0 && this.hasAttribute('download')) {"
-                + "saveBlobUrl(href, this.getAttribute('download')); return;"
-                + "}"
-                + "return originalClick.apply(this, arguments);"
-                + "};"
-                + "document.addEventListener('click', function(e) {"
-                + "var a = e.target.closest ? e.target.closest('a') : null;"
-                + "if(a && a.href && a.href.indexOf('blob:') === 0 && a.hasAddress && a.hasAttribute('download')) {"
-                + "e.preventDefault(); e.stopImmediatePropagation(); saveBlobUrl(a.href, a.getAttribute('download'));"
-                + "}"
-                + "}, true); "
-                + "})();";
-        webView.evaluateJavascript(js, null);
-    }
-
-    private class PdfBridge {
-        @android.webkit.JavascriptInterface
-        public void savePdf(String dataUrl, String filename) {
-            runOnUiThread(() -> savePdfToDownloads(dataUrl, filename));
-        }
-    }
-
-    private void savePdfToDownloads(String dataUrl, String filename) {
-        try {
-            if (dataUrl == null || !dataUrl.contains(",")) {
-                throw new IllegalArgumentException("Invalid PDF data");
-            }
-            String base64 = dataUrl.substring(dataUrl.indexOf(",") + 1);
-            byte[] bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT);
-            String safeName = (filename == null ? "EzyPdf_Document.pdf" :
-                    filename.replaceAll("[\\\\/:*?\"<>|]", "_"));
-            if (!safeName.toLowerCase().endsWith(".pdf")) safeName += ".pdf";
-
-            ContentValues values = new ContentValues();
-            values.put(MediaStore.Downloads.DISPLAY_NAME, safeName);
-            values.put(MediaStore.Downloads.MIME_TYPE, "application/pdf");
-            values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
-
-            Uri collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
-            Uri item = getContentResolver().insert(collection, values);
-            if (item == null) throw new Exception("Could not create download");
-
-            try (OutputStream out = getContentResolver().openOutputStream(item)) {
-                if (out == null) throw new Exception("Could not open download");
-                out.write(bytes);
-                out.flush();
-            }
-            Toast.makeText(this, "PDF saved to Downloads folder!", Toast.LENGTH_LONG).show();
-        } catch (Exception e) {
-            Toast.makeText(this, "PDF save failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
@@ -332,7 +265,6 @@ public class MainActivity extends Activity {
             filePathCallback = null;
         }
         if (webView != null) {
-            webView.removeJavascriptInterface("EzyPdfAndroid");
             webView.destroy();
         }
         super.onDestroy();
